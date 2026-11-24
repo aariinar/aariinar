@@ -50,6 +50,7 @@ class Tree:
         self.freq = rng.uniform(0.55, 1.05)
         self.slope = rng.uniform(0.85, 1.2)
         self.seed = rng.randrange(1 << 30)
+        self.shade = rng.randrange(3)
 
 
 class Fire:
@@ -108,18 +109,19 @@ class Scene:
 
         # forest corridor: tiny trees far away in the middle, huge ones near the edges
         trees = []
-        for _ in range(max(8, W // 5)):            # far band along the horizon
+        for _ in range(max(6, W // 8)):            # far band along the horizon
             trees.append(Tree(rng.uniform(W * .25, W * .75), self.horizon + rng.randint(-1, 2),
                               rng.randint(2, max(3, int(H * .09))), 0.05, rng))
         for side in (-1, 1):
-            for _ in range(max(10, W // 6)):
-                d = rng.random() ** 0.8           # 0 = far, 1 = near
+            n = max(7, W // 11)
+            for i in range(n):
+                d = ((i + rng.random()) / n) ** 0.8   # 0 = far, 1 = near (evenly spread)
                 base = int(self.horizon + (H * 0.80 - self.horizon) * d ** 1.25) + rng.randint(-1, 1)
                 h = int(H * (0.10 + 0.62 * d ** 1.3) * rng.uniform(0.8, 1.15))
                 gap = W * (0.04 + 0.30 * d ** 1.15)
                 x = cx + side * (gap + rng.uniform(0, W * 0.16 * d + 3))
                 trees.append(Tree(x, base, max(3, h), d, rng))
-            for _ in range(3):                    # giants on the very edge
+            for _ in range(1):                    # giants on the very edge
                 x = (rng.uniform(-0.06, 0.08) * W) if side < 0 else (rng.uniform(0.92, 1.06) * W)
                 trees.append(Tree(x, int(H * rng.uniform(0.82, 0.9)), int(H * rng.uniform(0.75, 0.9)), 1.0, rng))
         trees.sort(key=lambda tr: (tr.base, tr.d))
@@ -305,12 +307,21 @@ class Scene:
         gust = 0.6 + 0.22 * abs(self.wind) + 0.25 * math.sin(t * 0.37)
         for tr in self.trees:
             d = tr.d
-            body = min(253, 241 + int(d * 13))
-            edge = min(255, body + 3)
-            fill = "^/\\.'" if d < 0.25 else ("/\\Am^#*=" if d < 0.6 else ("#mA%&*=#m" if d < 0.92 else "HH%#H&#H"))
-            sparse = 0.45 * (1 - d) ** 2
+            if d < 0.25:
+                greens, fill, snow_c, trunk_c = (22, 23), "^/\\'.", 250, 52
+            elif d < 0.55:
+                greens, fill, snow_c, trunk_c = (22, 28, 29), "/\\Am^#", 253, 94
+            elif d < 0.9:
+                greens, fill, snow_c, trunk_c = (28, 29, 34, 65), "#mA%&#m", 255, 94
+            else:
+                greens, fill, snow_c, trunk_c = (28, 34, 65, 71), "#H%m&#Hm", 255, 130
+            # every tree gets its own shade so neighbours don't blend together
+            shift = (0, 1, -1)[tr.shade]
+            pal = (22, 23, 28, 29, 34, 35, 65, 71, 77)
+            greens = tuple(pal[max(0, min(len(pal) - 1, pal.index(g) + shift * 2))] for g in greens)
+            edge_c = greens[-1]
             amp = 0.5 + 2.2 * d
-            tier = max(3, tr.h // 7)
+            tier = max(3, tr.h // 5)
             top = tr.base - tr.h
             sway = amp * gust * math.sin(t * tr.freq + tr.phase)
             lean = self.wind * 0.3 * d
@@ -318,25 +329,35 @@ class Scene:
                 y = top + r
                 k = (1 - r / tr.h) ** 1.4
                 off = int(round((sway + lean) * k))
-                hw = int(tr.slope * (0.40 * r + 0.8 * (r % tier)))
+                rr = r % tier
+                hw = int(tr.slope * (0.40 * r + 0.8 * rr))
                 cx = tr.x + off
+                # dark outline so overlapping trees stay separate
+                put(cx - hw - 1, y, " ", 16, False)
+                put(cx + hw + 1, y, " ", 16, False)
                 for i in range(-hw, hw + 1):
                     hv = h32(tr.seed, r, i)
+                    edge = i == -hw or i == hw
                     if r == 0:
-                        c, col = "A", edge
-                    elif i == -hw:
-                        c, col = "/", edge
-                    elif i == hw:
-                        c, col = "\\", edge
-                    elif r % tier == 0 and hv % 10 < 7 or hv % 11 == 0:
-                        c, col = ("*" if hv % 3 else "_"), 255
-                    elif (hv % 1000) / 1000 < sparse:
-                        continue
+                        c, col = "A", snow_c                       # snowy tip
+                    elif rr == 0 or (rr == 1 and edge):
+                        # snow lying on top of each tier of branches
+                        c = "/" if i == -hw else ("\\" if i == hw else "*~^_*"[hv % 5])
+                        col = snow_c
+                    elif edge:
+                        c, col = ("/" if i < 0 else "\\"), edge_c
+                    elif rr == tier - 1 and hv % 3 == 0:
+                        c, col = "_", greens[0]                    # shadow under branches
+                    elif hv % 29 == 0:
+                        c, col = "*", snow_c                       # stray snow clumps
                     else:
-                        c, col = fill[hv % len(fill)], body
+                        c, col = fill[hv % len(fill)], greens[hv % len(greens)]
                     put(cx + i, y, c, col)
-            for r in range(max(1, tr.h // 9)):
-                put(tr.x, tr.base + r, "|" if d < 0.6 else "H", body - 4)
+            tw = 1 if d < 0.4 else 3
+            for r in range(max(1, min(4, tr.h // 8))):
+                for j in range(tw):
+                    c = "|" if tw == 1 else "|#|"[j]
+                    put(tr.x - tw // 2 + j, tr.base + r, c, trunk_c)
 
     def status(self, fps):
         on = lambda b: "on" if b else "off"
