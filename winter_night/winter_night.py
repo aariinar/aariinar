@@ -308,17 +308,17 @@ class Scene:
         for tr in self.trees:
             d = tr.d
             if d < 0.25:
-                greens, fill, snow_c, trunk_c = (22, 23), "^/\\'.", 250, 52
+                greens, fill, snow_c, trunk_c = (59, 65), "^/\\'.", 250, 52
             elif d < 0.55:
-                greens, fill, snow_c, trunk_c = (22, 28, 29), "/\\Am^#", 253, 94
+                greens, fill, snow_c, trunk_c = (65, 66, 108), "/\\Am^#", 253, 94
             elif d < 0.9:
-                greens, fill, snow_c, trunk_c = (28, 29, 34, 65), "#mA%&#m", 255, 94
+                greens, fill, snow_c, trunk_c = (108, 114, 151), "#mA%&#m", 255, 94
             else:
-                greens, fill, snow_c, trunk_c = (28, 34, 65, 71), "#H%m&#Hm", 255, 130
+                greens, fill, snow_c, trunk_c = (108, 151, 157, 194), "#H%m&#Hm", 255, 130
             # every tree gets its own shade so neighbours don't blend together
             shift = (0, 1, -1)[tr.shade]
-            pal = (22, 23, 28, 29, 34, 35, 65, 71, 77)
-            greens = tuple(pal[max(0, min(len(pal) - 1, pal.index(g) + shift * 2))] for g in greens)
+            pal = (59, 65, 66, 108, 114, 151, 157, 194)
+            greens = tuple(pal[max(0, min(len(pal) - 1, pal.index(g) + shift))] for g in greens)
             edge_c = greens[-1]
             amp = 0.5 + 2.2 * d
             tier = max(3, tr.h // 5)
