@@ -14,7 +14,7 @@ Keys:
   <- / ->     wind  (or a / d)     g       glow on/off
   up / down   snow  (or w / s)     m       moon on/off
   [ / ]       fire                 p       sparks on/off
-                                   l       fireflies on/off
+  , / .       fireflies
 """
 import argparse
 import curses
@@ -25,18 +25,10 @@ import sys
 import time
 
 # ---------------------------------------------------------------- palettes
-FIRE_RAMP = [52, 88, 124, 160, 196, 202, 208, 214, 220, 226, 228, 229, 230, 231]
-FIRE_CHARS = " .,:;=+*oxX#%@"
-GLOW_RAMP = [94, 130, 136, 172, 178, 214, 220, 221, 222, 223]
+FIRE_RAMP = [52, 88, 130, 166, 202, 208, 214, 220, 226, 227, 228, 229, 230, 230]
+FIRE_CHARS = " .:;+*xxXXX0OO@@ee"
+GLOW_RAMP = [180, 186, 222, 221, 220, 214, 220, 226, 228, 229]
 SPARK_RAMP = [88, 124, 160, 202, 208, 214, 220, 226]
-
-LAYERS = {
-    #         body  edge  snow  trunk  fill chars          sparse  sway
-    "back":  (237,  240,  246,  236,   "^'.:",              0.45,   0.8),
-    "mid":   (65,   102,  252,  94,    "/\\^Am*",           0.15,   1.3),
-    "front": (108,  145,  255,  130,   "#%&AmH#m",          0.04,   2.2),
-}
-
 
 def h32(*vals):
     """Small deterministic hash -> int, so tree texture doesn't flicker."""
@@ -52,8 +44,8 @@ def h32(*vals):
 
 # ---------------------------------------------------------------- objects
 class Tree:
-    def __init__(self, x, base, height, layer, rng):
-        self.x, self.base, self.h, self.layer = x, base, height, layer
+    def __init__(self, x, base, height, depth, rng):
+        self.x, self.base, self.h, self.d = x, base, height, depth
         self.phase = rng.random() * math.tau
         self.freq = rng.uniform(0.55, 1.05)
         self.slope = rng.uniform(0.85, 1.2)
@@ -70,11 +62,11 @@ class Fire:
     def step(self, intensity, wind):
         w, h, g = self.w, self.h, self.g
         cx = (w - 1) / 2
-        power = min(1.0, intensity / 1.4)
+        power = min(1.0, intensity / 1.2)
         for x in range(w):
-            fall = max(0.0, 1 - (abs(x - cx) / (w / 2)) ** 1.6)
+            fall = max(0.0, 1 - (abs(x - cx) / (w / 2)) ** 2.2)
             g[h - 1][x] = min(1.0, fall * power * random.uniform(0.7, 1.15))
-        decay = 1.5 / (h * max(0.35, min(1.6, intensity / 1.5)))
+        decay = 1.15 / (h * max(0.35, min(1.6, intensity / 1.5)))
         lean = max(-0.9, min(0.9, wind / 5))
         for y in range(h - 1):
             row, below = g[y], g[y + 1]
@@ -96,67 +88,73 @@ class Scene:
         self.W, self.H = W, H          # H excludes the status line
         self.rng = random.Random(seed)
         self.t = 0.0
-        self.speed, self.wind, self.snow, self.fire_lvl = 1.0, 2.4, 1.6, 1.7
-        self.glow_on = self.moon_on = self.sparks_on = self.flies_on = True
+        self.speed, self.wind, self.snow, self.fire_lvl, self.flies_lvl = 1.0, 2.4, 1.6, 1.7, 2.0
+        self.glow_on = self.moon_on = self.sparks_on = True
         self.build()
 
     # ------------------------------------------------ layout
     def build(self):
         W, H, rng = self.W, self.H, self.rng
-        self.horizon = int(H * 0.56)
+        cx = W / 2
+        self.horizon = int(H * 0.40)
 
-        fw = max(12, min(30, W // 7))
-        fh = max(7, min(20, H // 3))
+        fw = max(11, min(34, W // 7))
+        fh = max(7, int(H * 0.28))
         self.fire = Fire(fw, fh)
-        self.fire_x0 = W // 2 - fw // 2
-        self.fire_base = H - 3                     # bottom row of flames
-        self.glow_c = (W / 2, self.fire_base - 1)
-        self.glow_r = max(8.0, H * 0.55)
+        self.fire_x0 = int(cx - fw / 2)
+        self.fire_base = H - 2                     # bottom row of flames, embers under it
+        self.glow_c = (cx, H - 4)
+        self.glow_r = max(8.0, H * 0.42)
 
-        self.trees = {"back": [], "mid": [], "front": []}
-        for _ in range(max(6, W // 6)):
-            self.trees["back"].append(Tree(
-                rng.randrange(W), self.horizon + rng.randint(0, 1),
-                rng.randint(max(3, int(H * .10)), max(4, int(H * .22))), "back", rng))
-        for _ in range(max(3, W // 13)):
-            x = rng.randrange(W)
-            if abs(x - W / 2) < fw * 0.8:
-                x = int(W / 2 + (fw * 1.2 if x >= W / 2 else -fw * 1.2))
-            self.trees["mid"].append(Tree(
-                x, self.horizon + rng.randint(2, max(3, int(H * .14))),
-                rng.randint(max(5, int(H * .24)), max(6, int(H * .40))), "mid", rng))
-        side = max(2, W // 45)
-        for i in range(side):
-            for lo, hi in ((0, .22), (.78, 1.0)):
-                x = int(rng.uniform(lo, hi) * W)
-                self.trees["front"].append(Tree(
-                    x, H - rng.randint(1, 3),
-                    rng.randint(int(H * .50), max(int(H * .5) + 1, int(H * .82))), "front", rng))
-        for lst in self.trees.values():
-            lst.sort(key=lambda tr: tr.base)
+        # forest corridor: tiny trees far away in the middle, huge ones near the edges
+        trees = []
+        for _ in range(max(8, W // 5)):            # far band along the horizon
+            trees.append(Tree(rng.uniform(W * .25, W * .75), self.horizon + rng.randint(-1, 2),
+                              rng.randint(2, max(3, int(H * .09))), 0.05, rng))
+        for side in (-1, 1):
+            for _ in range(max(10, W // 6)):
+                d = rng.random() ** 0.8           # 0 = far, 1 = near
+                base = int(self.horizon + (H * 0.80 - self.horizon) * d ** 1.25) + rng.randint(-1, 1)
+                h = int(H * (0.10 + 0.62 * d ** 1.3) * rng.uniform(0.8, 1.15))
+                gap = W * (0.04 + 0.30 * d ** 1.15)
+                x = cx + side * (gap + rng.uniform(0, W * 0.16 * d + 3))
+                trees.append(Tree(x, base, max(3, h), d, rng))
+            for _ in range(3):                    # giants on the very edge
+                x = (rng.uniform(-0.06, 0.08) * W) if side < 0 else (rng.uniform(0.92, 1.06) * W)
+                trees.append(Tree(x, int(H * rng.uniform(0.82, 0.9)), int(H * rng.uniform(0.75, 0.9)), 1.0, rng))
+        trees.sort(key=lambda tr: (tr.base, tr.d))
+        self.trees = trees
+        for tr in trees:
+            tr.x = int(tr.x)
 
-        self.stars = [(rng.randrange(W), rng.randrange(max(1, self.horizon - 2)),
+        self.stars = [(rng.randrange(W), rng.randrange(max(1, self.horizon)),
                        rng.random() * math.tau, rng.uniform(0.6, 3.0))
-                      for _ in range(W * self.horizon // 28)]
-        self.moon = (int(W * 0.8), max(4, int(H * 0.14)), max(2, min(5, H // 12)))
+                      for _ in range(W * self.horizon // 40)]
+        self.moon = (int(W * 0.94), max(3, int(H * 0.15)), 2)
+        self.lanterns = [(int(cx - fw * 1.6), H - int(H * 0.22)), (int(cx + fw * 1.4), H - int(H * 0.24))]
 
-        self.flakes = []
-        self.sparks = []
-        self.flies = [[rng.uniform(0, W), rng.uniform(self.horizon - 4, H - 4),
-                       rng.random() * math.tau, rng.uniform(0.5, 1.5)]
-                      for _ in range(max(4, W // 18))]
+        self.flakes, self.sparks, self.flies = [], [], []
         self.adjust_snow()
+        self.adjust_flies()
 
     def adjust_snow(self):
-        target = int(self.W * self.H * 0.012 * self.snow)
+        target = int(self.W * self.H * 0.045 * self.snow)
         while len(self.flakes) < target:
             self.flakes.append(self.new_flake(top=False))
         del self.flakes[target:]
 
+    def adjust_flies(self):
+        r = self.rng
+        target = int(self.W / 22 * self.flies_lvl)
+        while len(self.flies) < target:
+            self.flies.append([r.uniform(0, self.W), r.uniform(self.horizon - 3, self.H - 3),
+                               r.random() * math.tau, r.uniform(0.5, 1.5)])
+        del self.flies[target:]
+
     def new_flake(self, top=True):
         r = self.rng
-        return [r.uniform(0, self.W), -1.0 if top else r.uniform(0, self.H),
-                r.random(), r.random() * math.tau]
+        z = r.random()
+        return [r.uniform(0, self.W), -1.0 if top else r.uniform(0, self.H) ** 1.0, z, r.random() * math.tau]
 
     # ------------------------------------------------ simulation
     def update(self, dt):
@@ -167,24 +165,24 @@ class Scene:
         self._fire_acc = getattr(self, "_fire_acc", 0.0) + dt * 22
         while self._fire_acc >= 1:
             self._fire_acc -= 1
-            self.fire.step(self.fire_lvl, self.wind)
+            self.fire.step(self.fire_lvl, self.wind * 0.3)
 
         for f in self.flakes:
             z = f[2]
-            f[1] += (2.0 + z * 5.0) * dt
+            f[1] += (2.0 + z * 6.0) * dt
             f[0] += (self.wind * (0.6 + z) + math.sin(t * 1.7 + f[3]) * 0.8) * dt
-            if f[1] >= H or (z > 0.5 and f[1] >= H - 2):
+            if f[1] >= H:
                 f[:] = self.new_flake()
             f[0] %= W
 
         if self.sparks_on:
-            rate = self.fire_lvl * 9 * dt
+            rate = self.fire_lvl * 8 * dt
             while rate > 0:
                 if r.random() < rate:
                     self.sparks.append([
-                        self.W / 2 + r.uniform(-1, 1) * self.fire.w * 0.25,
-                        self.fire_base - self.fire.h * 0.5,
-                        self.wind * 0.8 + r.uniform(-1.5, 1.5),
+                        W / 2 + r.uniform(-1, 1) * self.fire.w * 0.2,
+                        self.fire_base - self.fire.h * 0.6,
+                        self.wind * 0.6 + r.uniform(-1.5, 1.5),
                         -r.uniform(4, 10), r.uniform(0.8, 2.2)])
                 rate -= 1
         alive = []
@@ -201,7 +199,7 @@ class Scene:
             fl[2] += dt * fl[3]
             fl[0] = (fl[0] + math.cos(fl[2] * 1.3) * 2.2 * dt + self.wind * 0.1 * dt) % W
             fl[1] += math.sin(fl[2] * 0.9) * 1.1 * dt
-            fl[1] = max(self.horizon - 6, min(H - 3, fl[1]))
+            fl[1] = max(self.horizon - 4, min(H - 3, fl[1]))
 
     # ------------------------------------------------ rendering
     def render(self):
@@ -210,72 +208,68 @@ class Scene:
         co = [[16] * W for _ in range(H)]
 
         gx, gy = self.glow_c
-        gr = self.glow_r * (0.6 + 0.25 * self.fire_lvl)
-        flick = 0.85 + 0.1 * math.sin(t * 13.1) * math.sin(t * 7.3) + 0.25 * self.fire.heat_sum()
+        gr = self.glow_r * (0.55 + 0.25 * self.fire_lvl)
+        flick = 0.85 + 0.1 * math.sin(t * 13.1) * math.sin(t * 7.3) + 0.2 * self.fire.heat_sum()
         glow_on = self.glow_on and self.fire_lvl > 0.05
 
         def put(x, y, c, col, glow=True):
             if 0 <= x < W and 0 <= y < H:
                 if glow and glow_on:
-                    dx, dy = (x - gx) * 0.5, y - gy
-                    d = math.sqrt(dx * dx + dy * dy)
-                    i = (1 - d / gr) * flick
-                    if i > 0.12:
-                        col = GLOW_RAMP[min(len(GLOW_RAMP) - 1, int((i - 0.12) * 1.25 * len(GLOW_RAMP)))]
+                    dx, dy = (x - gx) * 0.45, y - gy
+                    i = (1 - math.sqrt(dx * dx + dy * dy) / gr) * flick
+                    if i > 0.3:
+                        col = GLOW_RAMP[min(len(GLOW_RAMP) - 1, int((i - 0.3) * 1.6 * len(GLOW_RAMP)))]
+                    elif i > 0.05 and (h32(x, y, 77) % 100) < i * 90:
+                        col = 222                  # warm specks on far trees
                 ch[y][x] = c
                 co[y][x] = col
 
-        # stars
+        # stars (most of the sky is snow anyway)
         for x, y, ph, sp in self.stars:
             b = math.sin(t * sp + ph)
-            if b > 0.75:
+            if b > 0.6:
                 put(x, y, "*", 255, False)
-            elif b > 0.1:
-                put(x, y, "+" if b > 0.5 else ".", 250, False)
-            elif b > -0.5:
-                put(x, y, ".", 241, False)
+            elif b > -0.2:
+                put(x, y, ".", 247, False)
 
-        # moon
-        if self.moon_on:
-            mx, my, mr = self.moon
-            for dy in range(-mr - 2, mr + 3):
-                for dx in range(-2 * mr - 4, 2 * mr + 5):
-                    d = math.hypot(dx / 2, dy)
-                    if d <= mr:
-                        hh = h32(dx, dy, 7) % 100
-                        if hh < 18:
-                            put(mx + dx, my + dy, "o", 187, False)
-                        else:
-                            put(mx + dx, my + dy, "@" if d < mr - 0.6 else "O", 230, False)
-                    elif d <= mr + 1.8 and h32(dx, dy, int(t * 1.5)) % 5 == 0:
-                        put(mx + dx, my + dy, ".", 243 if d < mr + 1 else 239, False)
-
-        self.draw_trees("back", put)
-
-        # ground
+        # ground: long rows of dashes in perspective
         gh = max(1, H - self.horizon)
         for y in range(self.horizon, H):
             k = (y - self.horizon) / gh
-            base = 236 + int(k * 6)
-            dens = 0.25 + 0.7 * k
+            seg = 3 + int(k * k * 20)
+            rowc = "'-'_'-="[h32(y, 11) % 7] if k > 0.35 else "-.,'"[h32(y, 12) % 4]
+            shift = h32(y, 5) % 50
+            col = 240 + int(k * 15)
             for x in range(W):
-                if ch[y][x] != " ":
+                hv = h32((x + shift) // seg, y, 9)
+                if hv % 5 == 0 or (k < 0.35 and hv % 3):
                     continue
-                hv = h32(x // 3 if k > 0.5 else x, y, 3)
-                if (hv % 1000) / 1000 < dens:
-                    c = "-_=~.,'"[hv % (3 if k > 0.4 else 7)]
-                    put(x, y, c, base)
+                put(x, y, rowc, col)
 
-        self.draw_trees("mid", put)
-        self.draw_trees("front", put)
+        self.draw_trees(put)
 
-        # logs
+        # moon peeking in at the top right
+        if self.moon_on:
+            mx, my, mr = self.moon
+            for dy in range(-mr, mr + 1):
+                for dx in range(-2 * mr - 1, 2 * mr + 2):
+                    d = math.hypot(dx / 2, dy)
+                    if d <= mr + 0.3:
+                        c = "0690O@"[h32(dx, dy, 5) % 6] if d < mr - 0.4 else "0"
+                        put(mx + dx, my + dy, c, 230 if d < mr - 0.4 else 252, False)
+
+        # lanterns on the sides of the path
+        for lx, ly in self.lanterns:
+            for j, row in enumerate(["[ ]", "[|]", " | "]):
+                for i, c in enumerate(row):
+                    if c != " ":
+                        put(lx + i, ly + j, c, 250)
+
+        # embers / logs under the fire
         fx0, fb, fw = self.fire_x0, self.fire_base, self.fire.w
-        logs = ["\\" + "=" * (fw - 2) + "/", " " + "/\\" * ((fw - 2) // 2) + " "]
-        for i, row in enumerate(logs):
-            for j, c in enumerate(row):
-                if c != " ":
-                    put(fx0 + j, fb + 1 + i, c, 94 if (j + i) % 3 else 130, False)
+        for j in range(-1, fw + 1):
+            c = ",.o_"[h32(j, int(t * 6)) % 4]
+            put(fx0 + j, fb + 1, c, (202, 166, 208, 130)[h32(j, int(t * 5)) % 4], False)
 
         # fire
         n = len(FIRE_CHARS) - 1
@@ -284,7 +278,7 @@ class Scene:
             y = fb - self.fire.h + 1 + fy
             for fx in range(fw):
                 v = row[fx]
-                if v > 0.06:
+                if v > 0.07:
                     put(fx0 + fx, y, FIRE_CHARS[min(n, 1 + int(v * n))],
                         FIRE_RAMP[min(len(FIRE_RAMP) - 1, int(v * len(FIRE_RAMP)))], False)
 
@@ -294,59 +288,61 @@ class Scene:
             put(int(x), int(y), "'" if life > 1.2 else ".", c, False)
 
         # fireflies
-        if self.flies_on:
-            for x, y, ph, _ in self.flies:
-                b = math.sin(t * 2.3 + ph * 3)
-                if b > 0.2:
-                    put(int(x), int(y), "*" if b > 0.7 else ".", 190 if b > 0.7 else 106, False)
+        for x, y, ph, _ in self.flies:
+            b = math.sin(t * 2.3 + ph * 3)
+            if b > 0.1:
+                put(int(x), int(y), "*" if b > 0.6 else "+", 226 if b > 0.6 else 184, False)
 
         # snow (on top of everything)
         for x, y, z, _ in self.flakes:
-            c = "." if z < 0.4 else ("+" if z < 0.75 else "*")
-            put(int(x), int(y), c, 244 + int(z * 11), False)
+            c = "." if z < 0.2 else ("'" if z < 0.35 else "*")
+            put(int(x), int(y), c, 247 + int(z * 8), False)
 
         return ch, co
 
-    def draw_trees(self, layer, put):
-        body, edge, snowc, trunkc, fill, sparse, amp = LAYERS[layer]
+    def draw_trees(self, put):
         t = self.t
         gust = 0.6 + 0.22 * abs(self.wind) + 0.25 * math.sin(t * 0.37)
-        for tr in self.trees[layer]:
+        for tr in self.trees:
+            d = tr.d
+            body = min(253, 241 + int(d * 13))
+            edge = min(255, body + 3)
+            fill = "^/\\.'" if d < 0.25 else ("/\\Am^#*=" if d < 0.6 else ("#mA%&*=#m" if d < 0.92 else "HH%#H&#H"))
+            sparse = 0.45 * (1 - d) ** 2
+            amp = 0.5 + 2.2 * d
+            tier = max(3, tr.h // 7)
             top = tr.base - tr.h
             sway = amp * gust * math.sin(t * tr.freq + tr.phase)
-            lean = self.wind * 0.35 * (amp / 2)
+            lean = self.wind * 0.3 * d
             for r in range(tr.h):
                 y = top + r
                 k = (1 - r / tr.h) ** 1.4
                 off = int(round((sway + lean) * k))
-                hw = int(tr.slope * (0.42 * r + 0.75 * (r % 4)))
+                hw = int(tr.slope * (0.40 * r + 0.8 * (r % tier)))
                 cx = tr.x + off
                 for i in range(-hw, hw + 1):
                     hv = h32(tr.seed, r, i)
                     if r == 0:
-                        c, col = ("A" if layer != "back" else "^"), edge
+                        c, col = "A", edge
                     elif i == -hw:
                         c, col = "/", edge
                     elif i == hw:
                         c, col = "\\", edge
-                    elif r % 4 == 0 and hv % 10 < 7 or hv % 13 == 0:
-                        c, col = ("*" if hv % 3 else "="), snowc
+                    elif r % tier == 0 and hv % 10 < 7 or hv % 11 == 0:
+                        c, col = ("*" if hv % 3 else "_"), 255
                     elif (hv % 1000) / 1000 < sparse:
                         continue
                     else:
                         c, col = fill[hv % len(fill)], body
                     put(cx + i, y, c, col)
             for r in range(max(1, tr.h // 9)):
-                tw = 1 if layer == "back" else 2
-                for i in range(tw):
-                    put(tr.x - tw // 2 + i, tr.base + r, "|" if tw == 1 else "H", trunkc)
+                put(tr.x, tr.base + r, "|" if d < 0.6 else "H", body - 4)
 
     def status(self, fps):
         on = lambda b: "on" if b else "off"
-        return (f" WINTER NIGHT | speed {self.speed:.2f} | wind {self.wind:+.1f} | "
-                f"snow {self.snow:.1f} | fire {self.fire_lvl:.1f} | sparks {on(self.sparks_on)} | "
-                f"flies {on(self.flies_on)} | glow {on(self.glow_on)} | moon {on(self.moon_on)} | "
-                f"{fps:.0f} fps | [H]elp ")
+        return (f" WINTER NIGHT | speed {self.speed:.2f} | wind {self.wind:.1f} | "
+                f"snow {self.snow:.1f} | fire {self.fire_lvl:.1f} | flies {self.flies_lvl:.1f} | "
+                f"glow {on(self.glow_on)} | moon {on(self.moon_on)} | {fps:.0f} fps | [H]elp ")
 
 
 HELP = [
@@ -358,10 +354,10 @@ HELP = [
     "  <- / ->      wind   (a / d)",
     "  up / down    snow   (w / s)",
     "  [ / ]        fire",
+    "  , / .        fireflies",
     "  g            glow on/off",
     "  m            moon on/off",
     "  p            sparks on/off",
-    "  l            fireflies on/off",
     "  h            close help",
 ]
 
@@ -434,9 +430,10 @@ def run(stdscr, args):
             elif key == curses.KEY_RESIZE:
                 old = scene
                 scene = make()
-                for a in ("speed", "wind", "snow", "fire_lvl", "glow_on", "moon_on", "sparks_on", "flies_on"):
+                for a in ("speed", "wind", "snow", "fire_lvl", "flies_lvl", "glow_on", "moon_on", "sparks_on"):
                     setattr(scene, a, getattr(old, a))
                 scene.adjust_snow()
+                scene.adjust_flies()
                 stdscr.clear()
             elif key == ord(" "):
                 paused = not paused
@@ -462,8 +459,10 @@ def run(stdscr, args):
                 scene.moon_on = not scene.moon_on
             elif key in (ord("p"), ord("P")):
                 scene.sparks_on = not scene.sparks_on
-            elif key in (ord("l"), ord("L")):
-                scene.flies_on = not scene.flies_on
+            elif key in (ord("."), ord(">")):
+                scene.flies_lvl = min(5.0, scene.flies_lvl + 0.5); scene.adjust_flies()
+            elif key in (ord(","), ord("<")):
+                scene.flies_lvl = max(0.0, scene.flies_lvl - 0.5); scene.adjust_flies()
             elif key in (ord("h"), ord("H"), ord("?")):
                 show_help = not show_help
             key = stdscr.getch()
@@ -493,7 +492,7 @@ def run(stdscr, args):
                 x = x2
         st = scene.status(fps) + ("| PAUSED " if paused else "")
         try:
-            stdscr.addstr(scene.H, 0, st[:W - 1].ljust(W - 1), colors.attr(250) | curses.A_REVERSE)
+            stdscr.addstr(scene.H, 0, st[:W - 1].ljust(W - 1), colors.attr(250))
         except curses.error:
             pass
         if show_help:
@@ -528,7 +527,7 @@ def preview(args):
                 line.append(f"\x1b[38;5;{cur}m")
             line.append(ch[y][x])
         out.append("".join(line) + "\x1b[0m")
-    out.append("\x1b[7m" + scene.status(args.fps)[:W] + "\x1b[0m")
+    out.append("\x1b[38;5;250m" + scene.status(args.fps)[:W] + "\x1b[0m")
     print("\n".join(out))
 
 
